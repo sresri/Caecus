@@ -1,0 +1,207 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>Caecus</title>
+  <style>
+    body {
+      margin: 0;
+      background: black;
+      color: white;
+      font-family: sans-serif;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      height: 100vh;
+    }
+
+    #status {
+      font-size: 1.5rem;
+      margin-bottom: 20px;
+    }
+
+    #transcript {
+      opacity: 0.3;
+      font-size: 1rem;
+      max-width: 60%;
+      text-align: center;
+    }
+
+    .pulse {
+      animation: pulse 1s infinite;
+    }
+
+    @keyframes pulse {
+      0% { opacity: 0.3; }
+      50% { opacity: 1; }
+      100% { opacity: 0.3; }
+    }
+  </style>
+</head>
+<body>
+  <div id="status">Loading...</div>
+  <div id="transcript">(Press Enter to Begin Listening)</div>
+
+  <script>
+    const statusEl = document.getElementById("status");
+    const transcriptEl = document.getElementById("transcript");
+
+    let recognition;
+    let recognizing = false;
+    let resultText = "";
+    let firstTime = true;
+
+    async function sendQuery(text) {
+      console.log("sendQuery was called with text:", text);
+      try {
+        let res;
+        try {
+          res = await fetch("/query", {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json"
+            },
+            body: JSON.stringify({ query: text })
+          });
+          console.log("Fetch returned, status:", res.status);
+        } catch (fetchErr) {
+          console.error("Fetch threw an error:", fetchErr);
+          return;
+        }
+
+        const contentType = res.headers.get("content-type");
+        console.log("Content-Type:", contentType);
+
+        const textData = await res.text();
+        console.log("Raw response text:", textData);
+
+        let data;
+        try {
+          data = JSON.parse(textData);
+          console.log("RETURNED DATA:", data);
+        } catch (jsonErr) {
+          console.error("Failed to parse JSON:", jsonErr);
+          return;
+        }
+
+        const summary = data.summary;
+        console.log("WE REACHED THE SUMMARY", summary);
+        resultText = summary;
+        window.currentSummary = summary;
+      } catch (err) {
+        console.error("Outer try/catch error:", err);
+      }
+    }
+
+    function playBeep(frequency = 600, duration = 150, volume = 0.2) {
+      const ctx = new (window.AudioContext || window.webkitAudioContext)();
+      if (ctx.state === 'suspended') {
+        ctx.resume();
+      }
+
+      const osc = ctx.createOscillator();
+      const gain = ctx.createGain();
+
+      osc.type = "sine";
+      osc.frequency.value = frequency;
+      gain.gain.value = volume;
+
+      osc.connect(gain);
+      gain.connect(ctx.destination);
+      osc.start();
+      osc.stop(ctx.currentTime + duration / 1000);
+    }
+
+    function speak(text) {
+      fetch('/tts', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({ text: text })
+      })
+      .then(response => response.blob())
+      .then(blob => {
+        const audio = new Audio(URL.createObjectURL(blob));
+        audio.play();
+      });
+    }
+
+    function startListening() {
+      if (!recognition) {
+        setupRecognition();
+      }
+      recognizing = true;
+      resultText = "";
+      transcriptEl.textContent = "";
+      statusEl.textContent = "Listening...";
+      statusEl.classList.add("pulse");
+
+      playBeep(800, 200, 0.4);
+      recognition.start();
+    }
+
+    function stopListening() {
+      recognizing = false;
+      statusEl.textContent = "Complete. Press Enter to Start Again";
+      statusEl.classList.remove("pulse");
+      playBeep(800, 200, 0.4);
+      recognition.stop();
+    }
+
+    function setupRecognition() {
+      window.SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+      recognition = new SpeechRecognition();
+      recognition.lang = "en-US";
+      recognition.interimResults = false;
+      recognition.continuous = false;
+
+      recognition.onresult = (event) => {
+        const transcript = event.results[0][0].transcript.trim();
+        resultText = transcript;
+        transcriptEl.textContent = transcript;
+        statusEl.textContent = "Processing query...";
+
+        sendQuery(transcript)
+          .then(() => {
+            statusEl.textContent = "Search complete. Press Enter to copy.";
+          })
+          .catch((err) => {
+            console.error("sendQuery failed:", err);
+            statusEl.textContent = "An error occurred. Check console.";
+          });
+      };
+
+      recognition.onerror = (event) => {
+        statusEl.textContent = "Error. Try again.";
+        speak("Something went wrong. Please try again.");
+      };
+    }
+
+    document.addEventListener("keydown", (e) => {
+      if (e.key === "Enter") {
+        if (firstTime) {
+          firstTime = false;
+          speak("Welcome. Use the enter key to start. You will only need the Enter key and your voice to use this platform.");
+          return;
+        }
+
+        if (!recognizing) {
+          startListening();
+        } else {
+          stopListening();
+        }
+
+        if (resultText && !recognizing) {
+          navigator.clipboard.writeText(resultText).then(() => {
+            speak("Your result is ready! Pressing enter will copy your current result to clipboard. Pressing enter again will start listening.");
+          });
+        }
+      }
+    });
+
+    window.onload = () => {
+      statusEl.textContent = "Welcome to Caecus";
+    };
+  </script>
+</body>
+</html>
